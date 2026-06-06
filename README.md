@@ -221,3 +221,17 @@ ESTACIONES: "FU2:99,CHS:99,NBL:99,PLA:99"
 ```
 
 Ver `wws-poller/README.md` y `core/README.md` para detalles.
+
+---------------------------------------------------------------------------------------------------
+
+## Cambios Patricio Valdés UCT (Rama de Evaluación y Refactorización)
+
+**⚠️ Nota sobre Archivos Omitidos (Modelos de IA):**
+Debido a las restricciones de almacenamiento de GitHub (archivos mayores a 100MB), los "cerebros" del modelo de Inteligencia Artificial original no fueron incluidos en este repositorio. 
+
+Para que el contenedor `worker-deteccion` pueda levantarse localmente sin errores, es estrictamente necesario copiar de forma manual los siguientes dos archivos originales en la ruta `worker-deteccion/pipeline_v5/`:
+
+1. `rep2_weights.pt` (~1.5 GB) - Contiene los pesos pre-entrenados de la red neuronal VGG16 en formato PyTorch.
+2. `OOD_detector.pkl` (~247 MB) - Contiene el modelo K-Nearest Neighbors (Cleanlab) utilizado para detectar ruido fuera de distribución.
+
+*Nota técnica: El archivo Dockerfile está configurado para ejecutar PyTorch exclusivamente en CPU (`--index-url https://download.pytorch.org/whl/cpu`), por lo que no se requiere entorno CUDA para ejecutar la inferencia de estos modelos.*
