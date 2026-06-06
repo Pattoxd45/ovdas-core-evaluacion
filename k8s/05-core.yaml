@@ -1,0 +1,81 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: core
+  namespace: ovdas
+  labels:
+    app: core
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: core
+  template:
+    metadata:
+      labels:
+        app: core
+    spec:
+      # Esperar a que postgres y rabbitmq estén listos
+      initContainers:
+        - name: wait-postgres
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z postgres 5432; do
+                echo "Esperando postgres..."; sleep 2
+              done
+        - name: wait-rabbitmq
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z rabbitmq 5672; do
+                echo "Esperando rabbitmq..."; sleep 2
+              done
+      containers:
+        - name: core
+          image: ovdas/core:latest
+          imagePullPolicy: Never    # imagen local (K3s ctr import)
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: ovdas-config
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: core
+  namespace: ovdas
+spec:
+  selector:
+    app: core
+  type: NodePort
+  ports:
+    - port: 8000
+      targetPort: 8000
+      nodePort: 30800    # http://<node-ip>:30800

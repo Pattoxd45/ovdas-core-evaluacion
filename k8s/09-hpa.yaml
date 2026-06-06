@@ -1,0 +1,106 @@
+# ============================================================
+# Horizontal Pod Autoscaler — escala workers ante enjambres
+# Tesis §3.7.2: HPA reacciona cuando CPU > 60%
+# Escala de 1 a 5 réplicas en ~45 segundos
+# ============================================================
+
+---
+# HPA para worker-deteccion (ADOVE — CPU-intensivo)
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hpa-worker-deteccion
+  namespace: ovdas
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: worker-deteccion
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 15
+    scaleDown:
+      stabilizationWindowSeconds: 120
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+
+---
+# HPA para worker-localizacion (Hyposat — subprocess Fortran)
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hpa-worker-localizacion
+  namespace: ovdas
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: worker-localizacion
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 45
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 180
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+
+---
+# HPA para worker-picking (menos intensivo)
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hpa-worker-picking
+  namespace: ovdas
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: worker-picking
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 15
+    scaleDown:
+      stabilizationWindowSeconds: 120

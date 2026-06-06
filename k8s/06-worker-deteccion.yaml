@@ -1,0 +1,39 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-deteccion
+  namespace: ovdas
+  labels:
+    app: worker-deteccion
+spec:
+  replicas: 1    # HPA escala hasta 5
+  selector:
+    matchLabels:
+      app: worker-deteccion
+  template:
+    metadata:
+      labels:
+        app: worker-deteccion
+    spec:
+      initContainers:
+        - name: wait-rabbitmq
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z rabbitmq 5672; do sleep 2; done"]
+        - name: wait-postgres
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z postgres 5432; do sleep 2; done"]
+      containers:
+        - name: worker-deteccion
+          image: ovdas/worker-deteccion:latest
+          imagePullPolicy: Never
+          envFrom:
+            - configMapRef:
+                name: ovdas-config
+          resources:
+            requests:
+              cpu: 200m      # algoritmo ADOVE es CPU-intensivo
+              memory: 128Mi
+            limits:
+              cpu: "2"       # HPA reacciona sobre este límite
+              memory: 512Mi

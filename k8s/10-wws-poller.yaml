@@ -1,0 +1,52 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wws-poller
+  namespace: ovdas
+  labels:
+    app: wws-poller
+spec:
+  replicas: 1   # singleton — un solo poller por volcán/servidor WWS
+  selector:
+    matchLabels:
+      app: wws-poller
+  template:
+    metadata:
+      labels:
+        app: wws-poller
+    spec:
+      initContainers:
+        - name: wait-postgres
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z postgres 5432; do sleep 2; done"]
+      containers:
+        - name: wws-poller
+          image: ovdas/wws-poller:latest
+          imagePullPolicy: Never
+          envFrom:
+            - configMapRef:
+                name: ovdas-config
+          env:
+            - name: WWS_HOST
+              value: ""          # completar con IP/hostname del servidor Winston
+            - name: WWS_PORT
+              value: "16022"
+            - name: POLL_INTERVAL
+              value: "30"
+            - name: DATA_DIR
+              value: "/shared/data"
+          volumeMounts:
+            - name: seismic-data
+              mountPath: /shared/data
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: "200m"
+              memory: 128Mi
+      volumes:
+        - name: seismic-data
+          persistentVolumeClaim:
+            claimName: seismic-data-pvc

@@ -1,0 +1,219 @@
+version: "3.9"
+
+# ============================================================
+# OVDAS Microservicios — Docker Compose (desarrollo local)
+# ============================================================
+# Uso:
+#   docker compose up --build
+#   docker compose down -v   (limpia volúmenes)
+# ============================================================
+
+networks:
+  ovdas-net:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  rabbitmq-data:
+  seismic-data: # Volumen compartido: wws-poller escribe, worker-deteccion lee
+
+services:
+  # ── Infraestructura ────────────────────────────────────────
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: ovdas-postgres
+    environment:
+      POSTGRES_DB: ovdas
+      POSTGRES_USER: ovdas
+      POSTGRES_PASSWORD: ovdas
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - ovdas-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ovdas -d ovdas"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: ovdas-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ovdas
+      RABBITMQ_DEFAULT_PASS: ovdas
+    ports:
+      - "5672:5672" # AMQP
+      - "15672:15672" # Management UI  →  http://localhost:15672
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - ovdas-net
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: ovdas-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - ovdas-net
+
+  # ── Aplicaciones ───────────────────────────────────────────
+
+  core:
+    build:
+      context: ./core
+      dockerfile: Dockerfile
+    container_name: ovdas-core
+    environment:
+      RABBITMQ_URL: amqp://ovdas:ovdas@rabbitmq:5672/
+      POSTGRES_DSN: host=postgres port=5432 dbname=ovdas user=ovdas password=ovdas
+    ports:
+      - "8000:8000" # REST API  →  http://localhost:8000/docs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - ovdas-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  worker-deteccion:
+    build:
+      context: ./worker-deteccion
+      dockerfile: Dockerfile
+    container_name: ovdas-worker-deteccion
+    environment:
+      RABBITMQ_URL: amqp://ovdas:ovdas@rabbitmq:5672/
+      POSTGRES_DSN: host=postgres port=5432 dbname=ovdas user=ovdas password=ovdas
+      DATA_DIR: /shared/data # lee desde el volumen compartido con wws-poller
+      OUT_DIR: /app/out
+    ports:
+      - "8001:8001" # API REST →  http://localhost:8001/docs  (POST /procesar)
+    volumes:
+      # Volumen compartido: wws-poller deposita los .mseed, worker los lee
+      - seismic-data:/shared/data
+      # Filtros y modelos van baked into la imagen (ver Dockerfile)
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s # VGG16 tarda en cargar
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - ovdas-net
+    restart: unless-stopped
+    # Escalar réplicas: docker compose up --scale worker-deteccion=3
+    deploy:
+      replicas: 1
+
+  wws-poller:
+    build:
+      context: ./wws-poller
+      dockerfile: Dockerfile
+    container_name: ovdas-wws-poller
+    environment:
+      POSTGRES_DSN: host=postgres port=5432 dbname=ovdas user=ovdas password=ovdas
+      CORE_API_URL: http://core:8000
+      # Servidor WWS real (ignorado en modo dummy)
+      WWS_HOST: wws.sernageomin.cl
+      WWS_PORT: "29384"
+      # Estaciones: formato "ESTACION:VOLCAN" separado por comas
+      ESTACIONES: "FU2:99,CHS:99,NBL:99,PLA:99"
+      COMPONENTE: Z
+      CANAL: HHZ
+      DURACION_SEG: "3600" # ventana de 1 hora por consulta
+      MUESTRA_HZ: "100"
+      POLL_INTERVAL_SEC: "300" # cada 5 minutos (bajar a 60 para pruebas rápidas)
+      # Directorios
+      SHARED_DATA_DIR: /shared/data
+      TEMPLATES_DIR: /templates
+    volumes:
+      # Volumen compartido: poller deposita los archivos, worker los lee
+      # Templates .mseed van baked into la imagen (ver Dockerfile)
+      - seismic-data:/shared/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      core:
+        condition: service_healthy # espera a que el core esté listo para recibir trazas
+    networks:
+      - ovdas-net
+    restart: unless-stopped
+
+  worker-picking:
+    build:
+      context: ./worker-picking
+      dockerfile: Dockerfile
+    container_name: ovdas-worker-picking
+    environment:
+      RABBITMQ_URL: amqp://ovdas:ovdas@rabbitmq:5672/
+      POSTGRES_DSN: host=postgres port=5432 dbname=ovdas user=ovdas password=ovdas
+      DATA_DIR: /shared/data # mismo volumen que wws-poller y worker-deteccion
+      OUT_DIR: /app/out
+    volumes:
+      - seismic-data:/shared/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - ovdas-net
+    restart: unless-stopped
+
+  worker-localizacion:
+    build:
+      context: ./worker-localizacion
+      dockerfile: Dockerfile
+    container_name: ovdas-worker-localizacion
+    environment:
+      RABBITMQ_URL: amqp://ovdas:ovdas@rabbitmq:5672/
+      POSTGRES_DSN: host=postgres port=5432 dbname=ovdas user=ovdas password=ovdas
+      OUT_DIR: /app/out
+      HYPO_DIR: /app/hypo
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - ovdas-net
+    restart: unless-stopped
+
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: ovdas-api-gateway
+    environment:
+      POSTGRES_DSN: host=postgres port=5432 dbname=ovdas user=ovdas password=ovdas
+    ports:
+      - "8080:8080" # API Gateway  →  http://localhost:8080/docs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ovdas-net
+    restart: unless-stopped

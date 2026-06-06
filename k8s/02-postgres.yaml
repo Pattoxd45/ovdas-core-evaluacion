@@ -1,0 +1,163 @@
+---
+# PersistentVolumeClaim para PostgreSQL (K3s usa local-path por defecto)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: ovdas
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path    # StorageClass de K3s
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+# ConfigMap con el script SQL de inicialización
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: ovdas
+data:
+  init.sql: |
+    CREATE SCHEMA IF NOT EXISTS core;
+    CREATE SCHEMA IF NOT EXISTS deteccion;
+    CREATE SCHEMA IF NOT EXISTS picking;
+
+    CREATE TABLE core.pipeline_eventos (
+        evento_id       VARCHAR(25)  PRIMARY KEY,
+        volcan_id       VARCHAR(3)   NOT NULL,
+        estacion_id     VARCHAR(3)   NOT NULL,
+        estado          VARCHAR(30)  NOT NULL DEFAULT 'INGRESADO',
+        traza_metadata  JSONB,
+        error_msg       TEXT,
+        created_at      TIMESTAMP    NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMP    NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX idx_pipeline_estado ON core.pipeline_eventos(estado);
+
+    CREATE TABLE core.volcanes (
+        volcan_id VARCHAR(3) PRIMARY KEY,
+        nombre    VARCHAR(45) NOT NULL,
+        latitud   VARCHAR(45),
+        longitud  VARCHAR(45) NOT NULL,
+        altura    VARCHAR(45) NOT NULL
+    );
+    INSERT INTO core.volcanes VALUES
+        ('VLL','Villarrica','-39.4220','-71.9380','2847'),
+        ('LLA','Llaima','-38.6920','-71.7290','3125'),
+        ('CHI','Nevados de Chillán','-36.8630','-71.3790','3212');
+
+    CREATE TABLE core.estaciones (
+        estacion_id  VARCHAR(3) PRIMARY KEY,
+        nombre       VARCHAR(45) NOT NULL,
+        volcan_id    VARCHAR(3) REFERENCES core.volcanes(volcan_id),
+        latitud      VARCHAR(45),
+        longitud     VARCHAR(45),
+        altura       INT,
+        prioridad    INT DEFAULT 1,
+        distancia_crater FLOAT,
+        calibracion  FLOAT DEFAULT 1.0
+    );
+    INSERT INTO core.estaciones VALUES
+        ('PFT','Pino de Flojo','VLL','-39.4150','-71.9250',1850,1,1.2,1.0),
+        ('PVT','Playa Venecia','VLL','-39.4500','-71.9600',1600,2,2.1,1.0),
+        ('CHR','Chillán Sur','CHI','-36.9000','-71.4000',2800,1,0.8,1.0),
+        ('LLM','Llaima Norte','LLA','-38.6500','-71.7100',2100,1,1.5,1.0);
+
+    CREATE TABLE deteccion.resultados (
+        id SERIAL PRIMARY KEY,
+        evento_id VARCHAR(25) NOT NULL,
+        estacion VARCHAR(3) NOT NULL,
+        componente CHAR(1) NOT NULL DEFAULT 'Z',
+        snr FLOAT, label_event VARCHAR(2),
+        prob_vt FLOAT, prob_lp FLOAT, prob_tr FLOAT, prob_ot FLOAT,
+        inicio DOUBLE PRECISION, fin DOUBLE PRECISION,
+        largo FLOAT, prom_ruido_fondo FLOAT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX idx_det_evento ON deteccion.resultados(evento_id);
+
+    CREATE TABLE picking.resultados (
+        id SERIAL PRIMARY KEY,
+        evento_id VARCHAR(25) NOT NULL,
+        estacion VARCHAR(3) NOT NULL,
+        componente CHAR(1) NOT NULL DEFAULT 'Z',
+        t_p DOUBLE PRECISION, t_s DOUBLE PRECISION,
+        amplitud FLOAT, polar VARCHAR(2), freq_dom FLOAT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX idx_pick_evento ON picking.resultados(evento_id);
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: ovdas
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: ovdas
+            - name: POSTGRES_USER
+              value: ovdas
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ovdas-secret
+                  key: postgres-password
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "ovdas", "-d", "ovdas"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: postgres-pvc
+        - name: init
+          configMap:
+            name: postgres-init
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: ovdas
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+  clusterIP: None    # Headless para StatefulSet

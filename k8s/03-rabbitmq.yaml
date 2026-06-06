@@ -1,0 +1,102 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rabbitmq-pvc
+  namespace: ovdas
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rabbitmq
+  namespace: ovdas
+spec:
+  serviceName: rabbitmq
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rabbitmq
+  template:
+    metadata:
+      labels:
+        app: rabbitmq
+    spec:
+      containers:
+        - name: rabbitmq
+          image: rabbitmq:3.12-management-alpine
+          ports:
+            - name: amqp
+              containerPort: 5672
+            - name: management
+              containerPort: 15672
+          env:
+            - name: RABBITMQ_DEFAULT_USER
+              value: ovdas
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: ovdas-secret
+                  key: rabbitmq-password
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/rabbitmq
+          readinessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "ping"]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: rabbitmq-pvc
+
+---
+# Service interno (AMQP)
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  namespace: ovdas
+spec:
+  selector:
+    app: rabbitmq
+  ports:
+    - name: amqp
+      port: 5672
+      targetPort: 5672
+    - name: management
+      port: 15672
+      targetPort: 15672
+  clusterIP: None
+
+---
+# Service para acceso externo al Management UI
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq-ui
+  namespace: ovdas
+spec:
+  selector:
+    app: rabbitmq
+  type: NodePort
+  ports:
+    - port: 15672
+      targetPort: 15672
+      nodePort: 31672   # http://<node-ip>:31672

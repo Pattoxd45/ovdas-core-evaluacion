@@ -1,0 +1,52 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-localizacion
+  namespace: ovdas
+  labels:
+    app: worker-localizacion
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker-localizacion
+  template:
+    metadata:
+      labels:
+        app: worker-localizacion
+    spec:
+      initContainers:
+        - name: wait-rabbitmq
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z rabbitmq 5672; do sleep 2; done"]
+        - name: wait-postgres
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z postgres 5432; do sleep 2; done"]
+      containers:
+        - name: worker-localizacion
+          image: ovdas/worker-localizacion:latest
+          imagePullPolicy: Never
+          envFrom:
+            - configMapRef:
+                name: ovdas-config
+          env:
+            - name: HYPOSAT_BIN
+              value: "/app/hypo/hyposat"
+            - name: STATIONS_DAT
+              value: "/app/hypo/stations.dat"
+          volumeMounts:
+            - name: seismic-data
+              mountPath: /shared/data
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: "500m"
+              memory: 128Mi
+      volumes:
+        - name: seismic-data
+          persistentVolumeClaim:
+            claimName: seismic-data-pvc
