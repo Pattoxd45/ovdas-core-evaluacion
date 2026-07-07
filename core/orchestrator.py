@@ -193,7 +193,7 @@ def _descontar_estacion_silenciosa(evento_id: str) -> None:
     metadata = ((evento or {}).get("traza_metadata") or {})
 
     n_esperadas = int(metadata.get("n_estaciones", 1))
-    n_esperadas = max(1, n_esperadas - 1)          # descuenta esta estación
+    n_esperadas = max(0, n_esperadas - 1)          # descuenta esta estación
     db.actualizar_n_estaciones(evento_id, n_esperadas)
 
     n_recibidas = db.contar_picks(evento_id)
@@ -202,9 +202,16 @@ def _descontar_estacion_silenciosa(evento_id: str) -> None:
         evento_id, n_recibidas, n_esperadas
     )
     if n_recibidas >= n_esperadas:
-        db.actualizar_estado(evento_id, Estado.LOCALIZANDO)
-        publicar_tarea(Q_LOCALIZACION, {"evento_id": evento_id})
-        log.info("Picks suficientes tras descuento → evento %s LOCALIZANDO", evento_id)
+        if n_esperadas == 0:
+            db.actualizar_estado(evento_id, Estado.COMPLETADO)
+            log.info(
+                "Evento %s sin picks útiles (todas las estaciones silenciosas) → "
+                "COMPLETADO sin localización", evento_id
+            )
+        else:
+            db.actualizar_estado(evento_id, Estado.LOCALIZANDO)
+            publicar_tarea(Q_LOCALIZACION, {"evento_id": evento_id})
+            log.info("Picks suficientes tras descuento → evento %s LOCALIZANDO", evento_id)
 
 
 def _manejar_picking_completado(evento_id: str, payload: dict) -> None:
