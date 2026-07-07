@@ -12,7 +12,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Worker
-COPY worker.py .
+COPY workerlock.py .
 
 # ── HYPOSAT: binario + archivos estáticos ──────────────────────
 # hypo/ contiene: binario hyposat, tablas de tiempos de viaje,
@@ -25,4 +25,4 @@ RUN mkdir -p /app/out
 
 ENV PYTHONUNBUFFERED=1
 
-CMD ["python", "worker.py"]
+CMD ["python", "workerlock.py"]
